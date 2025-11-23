@@ -29,12 +29,13 @@ RUN git clone https://github.com/awslabs/amazon-kinesis-video-streams-producer-s
     && cd amazon-kinesis-video-streams-producer-sdk-cpp \
     && mkdir -p build \
     && cd build \
-    && cmake -DBUILD_GSTREAMER_PLUGIN=ON .. \
+    && cmake -DBUILD_GSTREAMER_PLUGIN=ON -DCMAKE_BUILD_TYPE=Release .. \
     && make
 
 ARG VIDEO_URL
 RUN wget -O /app/video.mp4 "${VIDEO_URL}"
 
+COPY kvs_log_configuration /app/amazon-kinesis-video-streams-producer-sdk-cpp/kvs_log_configuration
 COPY get-credentials.sh /app/
 COPY stream.sh /app/
 RUN chmod +x /app/get-credentials.sh /app/stream.sh

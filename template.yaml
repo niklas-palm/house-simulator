@@ -234,7 +234,9 @@ Resources:
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: AWS_KVS_LOG_LEVEL
-              Value: WARN
+              Value: ERROR
+            - Name: GST_DEBUG
+              Value: "1"
           LogConfiguration:
             LogDriver: awslogs
             Options:

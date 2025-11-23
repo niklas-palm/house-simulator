@@ -1,0 +1,4 @@
+log4cplus.rootLogger=ERROR, KvsConsoleAppender
+log4cplus.appender.KvsConsoleAppender=log4cplus::ConsoleAppender
+log4cplus.appender.KvsConsoleAppender.layout=log4cplus::PatternLayout
+log4cplus.appender.KvsConsoleAppender.layout.ConversionPattern=%D{%Y-%m-%d %H:%M:%S} [%-5p] %m%n
