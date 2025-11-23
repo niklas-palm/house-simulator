@@ -63,6 +63,10 @@ echo "✓ kvssink plugin available"
 # Set GST plugin path (adjust if needed based on your build)
 export GST_PLUGIN_PATH=/app/amazon-kinesis-video-streams-producer-sdk-cpp/build:${GST_PLUGIN_PATH}
 
+# Set KVS SDK log level (default: INFO, options: VERBOSE, DEBUG, INFO, WARN, ERROR, FATAL, SILENT)
+export AWS_KVS_LOG_LEVEL="${AWS_KVS_LOG_LEVEL:-WARN}"
+echo "KVS SDK log level: ${AWS_KVS_LOG_LEVEL}"
+
 # Function to stream video with GStreamer
 stream_video() {
     echo "[$(date)] Starting GStreamer pipeline..."
@@ -81,6 +85,7 @@ stream_video() {
             secret-key="${AWS_SECRET_ACCESS_KEY}" \
             aws-region="${AWS_DEFAULT_REGION}" \
             ${AWS_SESSION_TOKEN:+session-token="${AWS_SESSION_TOKEN}"} \
+            log-level="${AWS_KVS_LOG_LEVEL}" \
             framerate=30 \
             || {
         EXIT_CODE=$?
