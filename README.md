@@ -100,7 +100,7 @@ Removes all resources: scales down services, empties S3 bucket, deletes ECR imag
 
 ## Resource Allocation
 
-- **Camera**: 1 vCPU, 2 GB RAM
+- **Camera**: 2 vCPU, 4 GB RAM
 - **Telemetry**: 0.25 vCPU, 512 MB RAM
 - **Video retention**: 7 days
 - **Firehose interval**: 3 minutes

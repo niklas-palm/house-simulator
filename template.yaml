@@ -217,8 +217,8 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
-      Cpu: "1024"
-      Memory: "2048"
+      Cpu: "2048"
+      Memory: "4096"
       RuntimePlatform:
         CpuArchitecture: ARM64
         OperatingSystemFamily: LINUX
