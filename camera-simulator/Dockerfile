@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     curl \
+    ffmpeg \
     git \
     gstreamer1.0-plugins-base-apps \
     gstreamer1.0-plugins-bad \
