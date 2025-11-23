@@ -233,6 +233,8 @@ Resources:
               Value: backyard
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
+            - Name: AWS_KVS_LOG_LEVEL
+              Value: WARN
           LogConfiguration:
             LogDriver: awslogs
             Options:
