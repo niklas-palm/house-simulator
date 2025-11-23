@@ -1,0 +1,467 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Data Simulator System - Camera (KVS) and Temperature (Firehose) simulators
+
+Parameters:
+  CameraImageUri:
+    Type: String
+    Description: ECR URI for camera simulator image
+
+  TelemetryImageUri:
+    Type: String
+    Description: ECR URI for telemetry simulator image
+
+Resources:
+  ################################################################################
+  ###                            NETWORKING                                    ###
+  ################################################################################
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.99.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-igw
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.99.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.99.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-2
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  ################################################################################
+  ###                          SECURITY GROUPS                                 ###
+  ################################################################################
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ecs-sg
+
+  ################################################################################
+  ###                              ECS CLUSTER                                 ###
+  ################################################################################
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-cluster
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  ################################################################################
+  ###                              IAM ROLES                                   ###
+  ################################################################################
+
+  # ECS Task Execution Role (for pulling images and writing logs)
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+
+  # Camera Task Role (for KVS streaming)
+  CameraTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: KVSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesisvideo:*
+                Resource: "*"
+
+  # Telemetry Task Role (for Firehose)
+  TelemetryTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FirehoseAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:*
+                Resource: "*"
+
+  ################################################################################
+  ###                          CLOUDWATCH LOGS                                 ###
+  ################################################################################
+
+  CameraLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${AWS::StackName}-camera
+
+  TelemetryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${AWS::StackName}-telemetry
+
+  ################################################################################
+  ###                          ECS TASK DEFINITIONS                            ###
+  ################################################################################
+
+  CameraTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${AWS::StackName}-camera
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: "1024"
+      Memory: "2048"
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt CameraTaskRole.Arn
+      ContainerDefinitions:
+        - Name: camera-simulator
+          Image: !Ref CameraImageUri
+          Essential: true
+          Environment:
+            - Name: STREAM_NAME
+              Value: backyard
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CameraLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: camera
+
+  TelemetryTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${AWS::StackName}-telemetry
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: "256"
+      Memory: "512"
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TelemetryTaskRole.Arn
+      ContainerDefinitions:
+        - Name: telemetry-simulator
+          Image: !Ref TelemetryImageUri
+          Essential: true
+          Environment:
+            - Name: DELIVERY_STREAM_NAME
+              Value: !Ref DeliveryStream
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref TelemetryLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: telemetry
+
+  ################################################################################
+  ###                            ECS SERVICES                                  ###
+  ################################################################################
+
+  CameraService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${AWS::StackName}-camera-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref CameraTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      Tags:
+        - Key: service
+          Value: camera-simulator
+
+  TelemetryService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${AWS::StackName}-telemetry-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TelemetryTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      Tags:
+        - Key: service
+          Value: telemetry-simulator
+
+  ################################################################################
+  ###                       KINESIS VIDEO STREAM                               ###
+  ################################################################################
+
+  BackyardStream:
+    Type: AWS::KinesisVideo::Stream
+    Properties:
+      Name: backyard
+      DataRetentionInHours: 168
+      Tags:
+        - Key: service
+          Value: camera-simulator
+
+  ################################################################################
+  ###                    TELEMETRY DATA STORAGE (S3)                           ###
+  ################################################################################
+
+  TelemetryDataBucket:
+    Type: AWS::S3::Bucket
+
+  ################################################################################
+  ###                        KINESIS FIREHOSE                                  ###
+  ################################################################################
+
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FirehoseS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                Resource:
+                  - !Sub ${TelemetryDataBucket.Arn}/*
+                  - !GetAtt TelemetryDataBucket.Arn
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/*
+
+  DeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub ${AWS::StackName}-telemetry-stream
+      DeliveryStreamType: DirectPut
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !GetAtt TelemetryDataBucket.Arn
+        BufferingHints:
+          IntervalInSeconds: 180
+          SizeInMBs: 1
+        CompressionFormat: UNCOMPRESSED
+        Prefix: data/!{timestamp:yyyy-MM-dd}/
+        ErrorOutputPrefix: errors/!{firehose:error-output-type}/!{timestamp:yyyy-MM-dd}/
+        RoleARN: !GetAtt FirehoseRole.Arn
+      Tags:
+        - Key: service
+          Value: telemetry-simulator
+
+  ################################################################################
+  ###                    GLUE DATABASE AND TABLE                               ###
+  ################################################################################
+
+  TelemetryDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: house_db
+        Description: Database for house telemetry data
+
+  TelemetryTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref TelemetryDatabase
+      TableInput:
+        Name: temperature_readings
+        TableType: EXTERNAL_TABLE
+        PartitionKeys:
+          - Name: ingest_date
+            Type: string
+        Parameters:
+          "projection.enabled": "true"
+          "projection.ingest_date.type": "date"
+          "projection.ingest_date.range": "2025-01-01,NOW"
+          "projection.ingest_date.format": "yyyy-MM-dd"
+          "projection.ingest_date.interval": "1"
+          "projection.ingest_date.interval.unit": "DAYS"
+          "storage.location.template": !Sub "s3://${TelemetryDataBucket}/data/${!ingest_date}/"
+        StorageDescriptor:
+          Location: !Sub s3://${TelemetryDataBucket}/data/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            Name: json
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+          BucketColumns: []
+          NumberOfBuckets: 0
+          Columns:
+            - Name: room
+              Type: string
+            - Name: temperature
+              Type: double
+            - Name: humidity
+              Type: double
+            - Name: time_recorded
+              Type: string
+
+################################################################################
+###                              OUTPUTS                                     ###
+################################################################################
+
+Outputs:
+  ClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+
+  KVSStreamName:
+    Description: Kinesis Video Stream Name
+    Value: backyard
+
+  DeliveryStreamName:
+    Description: Kinesis Firehose Delivery Stream Name
+    Value: !Ref DeliveryStream
+
+  TelemetryBucketName:
+    Description: S3 Bucket for Telemetry Data
+    Value: !Ref TelemetryDataBucket
+
+  GlueDatabaseName:
+    Description: Glue Database Name
+    Value: !Ref TelemetryDatabase
+
+  GlueTableName:
+    Description: Glue Table Name
+    Value: temperature_readings
