@@ -68,9 +68,31 @@ echo "KVS SDK log level: ${AWS_KVS_LOG_LEVEL}"
 export GST_DEBUG="${GST_DEBUG:-1}"
 echo "GStreamer log level: ${GST_DEBUG}"
 
+# Function to refresh credentials from ECS metadata endpoint
+refresh_credentials() {
+    echo "[$(date)] Refreshing credentials from ECS metadata endpoint..."
+
+    if [ -z "$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" ]; then
+        echo "[$(date)] No ECS metadata endpoint available"
+        return 1
+    fi
+
+    CREDS=$(curl -s "http://169.254.170.2${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI}")
+
+    export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | python3 -c "import sys, json; print(json.load(sys.stdin)['AccessKeyId'])")
+    export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | python3 -c "import sys, json; print(json.load(sys.stdin)['SecretAccessKey'])")
+    export AWS_SESSION_TOKEN=$(echo "$CREDS" | python3 -c "import sys, json; print(json.load(sys.stdin)['Token'])")
+
+    echo "[$(date)] Credentials refreshed successfully"
+    return 0
+}
+
 # Function to stream video with GStreamer
 stream_video() {
     echo "[$(date)] Starting GStreamer pipeline..."
+
+    # Capture output to check for credential expiration
+    OUTPUT_FILE=$(mktemp)
 
     gst-launch-1.0 -e \
         filesrc location="${VIDEO_FILE}" ! \
@@ -84,9 +106,20 @@ stream_video() {
             access-key="${AWS_ACCESS_KEY_ID}" \
             secret-key="${AWS_SECRET_ACCESS_KEY}" \
             aws-region="${AWS_DEFAULT_REGION}" \
-            ${AWS_SESSION_TOKEN:+session-token="${AWS_SESSION_TOKEN}"}
+            ${AWS_SESSION_TOKEN:+session-token="${AWS_SESSION_TOKEN}"} \
+        2>&1 | tee "$OUTPUT_FILE"
 
     EXIT_CODE=$?
+
+    # Check for expired credentials
+    if grep -q "security token included in the request is expired" "$OUTPUT_FILE"; then
+        echo "[$(date)] ⚠ Credentials expired, need to refresh"
+        rm -f "$OUTPUT_FILE"
+        return 2  # Special code for credential expiration
+    fi
+
+    rm -f "$OUTPUT_FILE"
+
     if [ $EXIT_CODE -eq 0 ]; then
         echo "[$(date)] Video finished, looping..."
         return 0
@@ -130,7 +163,20 @@ while true; do
     echo "=========================================="
 
     # Stream video
-    if ! stream_video; then
+    stream_video
+    RESULT=$?
+
+    if [ $RESULT -eq 2 ]; then
+        # Credentials expired, refresh and retry immediately
+        echo "[$(date)] Refreshing credentials and restarting stream..."
+        if refresh_credentials; then
+            echo "[$(date)] Retrying with fresh credentials..."
+            sleep 2
+        else
+            echo "[$(date)] Failed to refresh credentials, retrying in 30 seconds..."
+            sleep 30
+        fi
+    elif [ $RESULT -ne 0 ]; then
         echo "[$(date)] Stream failed, retrying in 5 seconds..."
         sleep 5
     fi

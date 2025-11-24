@@ -8,11 +8,13 @@ Simulates home IoT devices: camera streaming to Kinesis Video Streams and temper
 simulate-house/
 ├── camera-simulator/       # Video streaming container (KVS)
 │   ├── Dockerfile
-│   ├── stream.sh
-│   └── get-credentials.sh
+│   ├── stream.sh          # Main streaming logic with credential refresh
+│   ├── get-credentials.sh # Fetches ECS credentials at startup
+│   └── kvs_log_configuration # Log4cplus config for KVS SDK
 ├── temperature-simulator/  # Telemetry data generator (Firehose)
 │   ├── Dockerfile
-│   └── telemetry.py
+│   ├── telemetry.py
+│   └── requirements.txt
 ├── template.yaml          # CloudFormation infrastructure
 └── Makefile              # Build and deployment automation
 ```
