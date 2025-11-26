@@ -1,12 +1,16 @@
-.PHONY: help install check-deps check-ecs-role build-camera-simulator build-telemetry-simulator push-camera-simulator push-telemetry-simulator deploy outputs delete all
+.PHONY: help install check-deps check-ecs-role build-camera-simulator build-telemetry-simulator build-weather-service build-heater-service push-camera-simulator push-telemetry-simulator push-weather-service push-heater-service deploy outputs delete all
 
 # Variables
 AWS_REGION ?= eu-west-1
 AWS_ACCOUNT_ID := $(shell aws sts get-caller-identity --query Account --output text)
 CAMERA_REPO_NAME := camera-simulator
 TELEMETRY_REPO_NAME := telemetry-simulator
+WEATHER_REPO_NAME := weather-service
+HEATER_REPO_NAME := heater-service
 CAMERA_IMAGE_URI := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(CAMERA_REPO_NAME):latest
 TELEMETRY_IMAGE_URI := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(TELEMETRY_REPO_NAME):latest
+WEATHER_IMAGE_URI := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(WEATHER_REPO_NAME):latest
+HEATER_IMAGE_URI := $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(HEATER_REPO_NAME):latest
 STACK_NAME := house-simulator
 VIDEO_URL := https://d3aubck6is8zpr.cloudfront.net/agentbootcampvideo2.mp4
 
@@ -27,10 +31,14 @@ help:
 	@echo "$(GREEN)Build Commands:$(RESET)"
 	@echo "  make build-camera-simulator      - Build camera simulator Docker image"
 	@echo "  make build-telemetry-simulator   - Build telemetry simulator Docker image"
+	@echo "  make build-weather-service       - Build weather service Docker image"
+	@echo "  make build-heater-service        - Build heater MCP service Docker image"
 	@echo ""
 	@echo "$(GREEN)Push Commands:$(RESET)"
 	@echo "  make push-camera-simulator       - Push camera image to ECR (creates repo if needed)"
 	@echo "  make push-telemetry-simulator    - Push telemetry image to ECR (creates repo if needed)"
+	@echo "  make push-weather-service        - Push weather service image to ECR (creates repo if needed)"
+	@echo "  make push-heater-service         - Push heater service image to ECR (creates repo if needed)"
 	@echo ""
 	@echo "$(GREEN)Deploy Commands:$(RESET)"
 	@echo "  make deploy                      - Deploy CloudFormation stack"
@@ -105,6 +113,16 @@ build-telemetry-simulator:
 	docker build --platform linux/arm64 -t $(TELEMETRY_REPO_NAME):latest ./temperature-simulator
 	@echo "$(GREEN)Telemetry simulator image built successfully$(RESET)"
 
+build-weather-service:
+	@echo "$(GREEN)Building weather service image...$(RESET)"
+	docker build --platform linux/amd64 -t $(WEATHER_REPO_NAME):latest ./weather-service
+	@echo "$(GREEN)Weather service image built successfully$(RESET)"
+
+build-heater-service:
+	@echo "$(GREEN)Building heater MCP service image...$(RESET)"
+	docker build --platform linux/amd64 -t $(HEATER_REPO_NAME):latest ./heater-service
+	@echo "$(GREEN)Heater MCP service image built successfully$(RESET)"
+
 push-camera-simulator: build-camera-simulator
 	@echo "$(GREEN)Logging into ECR...$(RESET)"
 	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
@@ -114,8 +132,21 @@ push-camera-simulator: build-camera-simulator
 		aws ecr create-repository --repository-name $(CAMERA_REPO_NAME) --region $(AWS_REGION))
 	@echo "$(GREEN)Tagging and pushing camera image...$(RESET)"
 	docker tag $(CAMERA_REPO_NAME):latest $(CAMERA_IMAGE_URI)
-	docker push $(CAMERA_IMAGE_URI)
-	@echo "$(GREEN)Camera image pushed successfully$(RESET)"
+	@for i in 1 2 3; do \
+		echo "$(YELLOW)Push attempt $$i of 3...$(RESET)"; \
+		if docker push $(CAMERA_IMAGE_URI); then \
+			echo "$(GREEN)Camera image pushed successfully$(RESET)"; \
+			break; \
+		else \
+			if [ $$i -lt 3 ]; then \
+				echo "$(YELLOW)Push failed, retrying in 5 seconds...$(RESET)"; \
+				sleep 5; \
+			else \
+				echo "$(YELLOW)Push failed after 3 attempts$(RESET)"; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
 
 push-telemetry-simulator: build-telemetry-simulator
 	@echo "$(GREEN)Logging into ECR...$(RESET)"
@@ -126,8 +157,58 @@ push-telemetry-simulator: build-telemetry-simulator
 		aws ecr create-repository --repository-name $(TELEMETRY_REPO_NAME) --region $(AWS_REGION))
 	@echo "$(GREEN)Tagging and pushing telemetry image...$(RESET)"
 	docker tag $(TELEMETRY_REPO_NAME):latest $(TELEMETRY_IMAGE_URI)
-	docker push $(TELEMETRY_IMAGE_URI)
-	@echo "$(GREEN)Telemetry image pushed successfully$(RESET)"
+	@for i in 1 2 3; do \
+		echo "$(YELLOW)Push attempt $$i of 3...$(RESET)"; \
+		if docker push $(TELEMETRY_IMAGE_URI); then \
+			echo "$(GREEN)Telemetry image pushed successfully$(RESET)"; \
+			break; \
+		else \
+			if [ $$i -lt 3 ]; then \
+				echo "$(YELLOW)Push failed, retrying in 5 seconds...$(RESET)"; \
+				sleep 5; \
+			else \
+				echo "$(YELLOW)Push failed after 3 attempts$(RESET)"; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
+
+push-weather-service: build-weather-service
+	@echo "$(GREEN)Logging into ECR...$(RESET)"
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	@echo "$(GREEN)Checking if ECR repository exists...$(RESET)"
+	@aws ecr describe-repositories --repository-names $(WEATHER_REPO_NAME) --region $(AWS_REGION) 2>/dev/null || \
+		(echo "$(YELLOW)Creating ECR repository $(WEATHER_REPO_NAME)...$(RESET)" && \
+		aws ecr create-repository --repository-name $(WEATHER_REPO_NAME) --region $(AWS_REGION))
+	@echo "$(GREEN)Tagging and pushing weather service image...$(RESET)"
+	docker tag $(WEATHER_REPO_NAME):latest $(WEATHER_IMAGE_URI)
+	docker push $(WEATHER_IMAGE_URI)
+	@echo "$(GREEN)Weather service image pushed successfully$(RESET)"
+
+push-heater-service: build-heater-service
+	@echo "$(GREEN)Logging into ECR...$(RESET)"
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	@echo "$(GREEN)Checking if ECR repository exists...$(RESET)"
+	@aws ecr describe-repositories --repository-names $(HEATER_REPO_NAME) --region $(AWS_REGION) 2>/dev/null || \
+		(echo "$(YELLOW)Creating ECR repository $(HEATER_REPO_NAME)...$(RESET)" && \
+		aws ecr create-repository --repository-name $(HEATER_REPO_NAME) --region $(AWS_REGION))
+	@echo "$(GREEN)Tagging and pushing heater service image...$(RESET)"
+	docker tag $(HEATER_REPO_NAME):latest $(HEATER_IMAGE_URI)
+	@for i in 1 2 3; do \
+		echo "$(YELLOW)Push attempt $$i of 3...$(RESET)"; \
+		if docker push $(HEATER_IMAGE_URI); then \
+			echo "$(GREEN)Heater service image pushed successfully$(RESET)"; \
+			break; \
+		else \
+			if [ $$i -lt 3 ]; then \
+				echo "$(YELLOW)Push failed, retrying in 5 seconds...$(RESET)"; \
+				sleep 5; \
+			else \
+				echo "$(YELLOW)Push failed after 3 attempts$(RESET)"; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
 
 deploy:
 	@echo "$(GREEN)Deploying CloudFormation stack...$(RESET)"
@@ -138,7 +219,9 @@ deploy:
 		--parameter-overrides \
 			CameraImageUri=$(CAMERA_IMAGE_URI) \
 			TelemetryImageUri=$(TELEMETRY_IMAGE_URI) \
-		--capabilities CAPABILITY_IAM \
+			WeatherImageUri=$(WEATHER_IMAGE_URI) \
+			HeaterImageUri=$(HEATER_IMAGE_URI) \
+		--capabilities CAPABILITY_NAMED_IAM \
 		--tags project=house-simulator \
 		--no-fail-on-empty-changeset
 	@echo "$(GREEN)Deployment complete!$(RESET)"
@@ -196,5 +279,5 @@ delete:
 		--region $(AWS_REGION) || true
 	@echo "$(GREEN)All resources deleted successfully!$(RESET)"
 
-all: check-deps check-ecs-role push-camera-simulator push-telemetry-simulator deploy
+all: check-deps check-ecs-role push-camera-simulator push-telemetry-simulator push-weather-service push-heater-service deploy
 	@echo "$(GREEN)All tasks completed successfully!$(RESET)"

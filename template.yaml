@@ -10,6 +10,14 @@ Parameters:
     Type: String
     Description: ECR URI for telemetry simulator image
 
+  WeatherImageUri:
+    Type: String
+    Description: ECR URI for weather service image
+
+  HeaterImageUri:
+    Type: String
+    Description: ECR URI for heater service image
+
 Resources:
   ################################################################################
   ###                            NETWORKING                                    ###
@@ -192,6 +200,21 @@ Resources:
                   - firehose:*
                 Resource: "*"
 
+  # ECS Express Infrastructure Role
+  ExpressInfrastructureRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-express-infrastructure-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRoleforExpressGatewayServices
+
   ################################################################################
   ###                          CLOUDWATCH LOGS                                 ###
   ################################################################################
@@ -317,6 +340,45 @@ Resources:
       Tags:
         - Key: service
           Value: telemetry-simulator
+
+  # Weather API Service (ECS Express)
+  WeatherExpressService:
+    Type: AWS::ECS::ExpressGatewayService
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: !Sub ${AWS::StackName}-weather-api
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      InfrastructureRoleArn: !GetAtt ExpressInfrastructureRole.Arn
+      Cpu: "256"
+      Memory: "512"
+      PrimaryContainer:
+        Image: !Ref WeatherImageUri
+        ContainerPort: 8000
+        Environment:
+          - Name: API_KEY
+            Value: !Select [2, !Split ["/", !Ref "AWS::StackId"]]
+      HealthCheckPath: /health
+      Tags:
+        - Key: service
+          Value: weather-api
+
+  # Heater MCP Service (ECS Express)
+  HeaterExpressService:
+    Type: AWS::ECS::ExpressGatewayService
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: !Sub ${AWS::StackName}-heater-mcp
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      InfrastructureRoleArn: !GetAtt ExpressInfrastructureRole.Arn
+      Cpu: "256"
+      Memory: "512"
+      PrimaryContainer:
+        Image: !Ref HeaterImageUri
+        ContainerPort: 8000
+      HealthCheckPath: /health
+      Tags:
+        - Key: service
+          Value: heater-mcp
 
   ################################################################################
   ###                       KINESIS VIDEO STREAM                               ###
@@ -469,3 +531,27 @@ Outputs:
   GlueTableName:
     Description: Glue Table Name
     Value: temperature_readings
+
+  WeatherApiServiceArn:
+    Description: Weather API Service ARN (ECS Express)
+    Value: !GetAtt WeatherExpressService.ServiceArn
+
+  WeatherApiServiceName:
+    Description: Weather API Service Name
+    Value: !Sub ${AWS::StackName}-weather-api
+
+  WeatherApiKey:
+    Description: API Key for Weather Service (use in X-API-Key header)
+    Value: !Select [2, !Split ["/", !Ref "AWS::StackId"]]
+
+  WeatherServiceArnFromGetAtt:
+    Description: Service ARN from GetAtt
+    Value: !GetAtt WeatherExpressService.ServiceArn
+
+  HeaterMcpServiceArn:
+    Description: Heater MCP Service ARN (ECS Express)
+    Value: !GetAtt HeaterExpressService.ServiceArn
+
+  HeaterMcpServiceName:
+    Description: Heater MCP Service Name
+    Value: !Sub ${AWS::StackName}-heater-mcp
